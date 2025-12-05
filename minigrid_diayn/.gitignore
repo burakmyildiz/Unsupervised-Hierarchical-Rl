@@ -1,0 +1,9 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+
+# Ignore large model files
+checkpoints/*.pt
+
+# Ignore system files
+.DS_Store
