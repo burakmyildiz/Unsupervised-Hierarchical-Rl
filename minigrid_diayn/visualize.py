@@ -678,6 +678,200 @@ def create_skill_demo_gif(
     print(f"Skill demo GIF saved to {save_path}")
 
 
+def plot_tsne_skill_states(
+    agent: DIAYNAgent,
+    env,
+    num_episodes: int = 10,
+    max_steps: int = 100,
+    save_path: str = 'tsne_skills.png'
+):
+    """Plot t-SNE of discriminator hidden representations colored by skill."""
+    import torch
+    from sklearn.manifold import TSNE
+
+    num_skills = agent.num_skills
+    states = []
+    skill_labels = []
+
+    # Collect discriminator observations for each skill
+    for skill in range(num_skills):
+        for _ in range(num_episodes):
+            state, info = env.reset()
+            for step in range(max_steps):
+                action = agent.select_action(state, skill, deterministic=True)
+                state, _, terminated, truncated, info = env.step(action)
+                disc_obs = agent.get_discriminator_obs(info)
+                states.append(disc_obs)
+                skill_labels.append(skill)
+                if terminated or truncated:
+                    break
+
+    states = np.array(states)
+    skill_labels = np.array(skill_labels)
+
+    # Get discriminator hidden representations
+    with torch.no_grad():
+        states_t = torch.FloatTensor(states).to(agent.device)
+        # Get hidden layer output (before final layer)
+        hidden = agent.discriminator.network[:-1](states_t).cpu().numpy()
+
+    # t-SNE
+    tsne = TSNE(n_components=2, perplexity=30, random_state=42)
+    embedded = tsne.fit_transform(hidden)
+
+    # Plot
+    fig, ax = plt.subplots(figsize=(10, 10))
+    colors = plt.cm.tab10(np.linspace(0, 1, num_skills))
+
+    for skill in range(num_skills):
+        mask = skill_labels == skill
+        ax.scatter(embedded[mask, 0], embedded[mask, 1],
+                  c=[colors[skill]], alpha=0.5, label=f'Skill {skill}', s=20)
+
+    ax.set_xlabel('t-SNE 1')
+    ax.set_ylabel('t-SNE 2')
+    ax.set_title('t-SNE of Discriminator Hidden States')
+    ax.legend(bbox_to_anchor=(1.05, 1))
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"t-SNE plot saved to {save_path}")
+
+
+def plot_skill_progression(
+    checkpoint_paths: List[str],
+    checkpoint_labels: List[str],
+    env,
+    config,
+    save_path: str = 'skill_progression.png'
+):
+    """Plot how skills evolve across training checkpoints."""
+    from diayn_agent import DIAYNAgent
+    from wrappers import get_env_info
+
+    env_info = get_env_info(env)
+    num_skills = config.num_skills
+    grid_width = env.unwrapped.width
+    grid_height = env.unwrapped.height
+
+    num_checkpoints = len(checkpoint_paths)
+    fig, axes = plt.subplots(num_skills, num_checkpoints, figsize=(4*num_checkpoints, 4*num_skills))
+
+    for cp_idx, (cp_path, cp_label) in enumerate(zip(checkpoint_paths, checkpoint_labels)):
+        agent = DIAYNAgent(config, env_info['obs_dim'], env_info['num_actions'])
+        agent.load(cp_path)
+
+        for skill in range(num_skills):
+            ax = axes[skill, cp_idx] if num_skills > 1 else axes[cp_idx]
+            counts = np.zeros((grid_height, grid_width))
+
+            for _ in range(10):
+                state, info = env.reset()
+                for _ in range(100):
+                    action = agent.select_action(state, skill, deterministic=True)
+                    state, _, done, _, info = env.step(action)
+                    counts[info['agent_pos'][1], info['agent_pos'][0]] += 1
+                    if done:
+                        break
+
+            if counts.max() > 0:
+                counts /= counts.max()
+            ax.imshow(counts, cmap='Blues')
+            if cp_idx == 0:
+                ax.set_ylabel(f'Skill {skill}')
+            if skill == 0:
+                ax.set_title(cp_label)
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+    plt.suptitle('Skill Learning Progression', fontsize=16)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Skill progression saved to {save_path}")
+
+
+def plot_hierarchical_usage(
+    skill_sequence: List[int],
+    rewards: List[float],
+    save_path: str = 'hierarchical_usage.png'
+):
+    """Plot which skills the meta-controller selected over time."""
+    fig, axes = plt.subplots(2, 1, figsize=(14, 6), sharex=True)
+
+    # Skill selection over time
+    ax = axes[0]
+    ax.plot(skill_sequence, 'o-', markersize=3, alpha=0.7)
+    ax.set_ylabel('Selected Skill')
+    ax.set_title('Meta-Controller Skill Selection')
+    ax.set_yticks(range(max(skill_sequence) + 1))
+
+    # Cumulative reward
+    ax = axes[1]
+    cumulative = np.cumsum(rewards)
+    ax.plot(cumulative, color='green')
+    ax.set_xlabel('Step')
+    ax.set_ylabel('Cumulative Reward')
+    ax.set_title('Episode Progress')
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Hierarchical usage saved to {save_path}")
+
+
+def plot_multi_env_comparison(
+    agent: DIAYNAgent,
+    env_keys: List[str],
+    config,
+    save_path: str = 'multi_env_comparison.png'
+):
+    """Compare skill behaviors across different environments."""
+    from environments import make_env
+
+    num_skills = config.num_skills
+    num_envs = len(env_keys)
+
+    fig, axes = plt.subplots(num_envs, num_skills, figsize=(3*num_skills, 3*num_envs))
+
+    for env_idx, env_key in enumerate(env_keys):
+        env, env_info = make_env(env_key, seed=42)
+        grid_size = env_info['grid_size']
+
+        for skill in range(num_skills):
+            ax = axes[env_idx, skill] if num_envs > 1 else axes[skill]
+            counts = np.zeros((grid_size, grid_size))
+
+            for _ in range(10):
+                state, info = env.reset()
+                for _ in range(100):
+                    action = agent.select_action(state, skill, deterministic=True)
+                    state, _, done, _, info = env.step(action)
+                    pos = info['agent_pos']
+                    if 0 <= pos[1] < grid_size and 0 <= pos[0] < grid_size:
+                        counts[pos[1], pos[0]] += 1
+                    if done:
+                        break
+
+            if counts.max() > 0:
+                counts /= counts.max()
+            ax.imshow(counts, cmap='Blues')
+            if skill == 0:
+                ax.set_ylabel(env_key, fontsize=10)
+            if env_idx == 0:
+                ax.set_title(f'Skill {skill}', fontsize=10)
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+        env.close()
+
+    plt.suptitle('Skill Behaviors Across Environments', fontsize=14)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Multi-env comparison saved to {save_path}")
+
+
 def create_all_visualizations(
     agent: DIAYNAgent,
     config: DIAYNConfig,
