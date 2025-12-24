@@ -43,6 +43,10 @@ class DIAYNConfig:
     # Network architecture
     hidden_dim: int = 256
 
+    # Discriminator observation dimension
+    # 6 = (x, y) normalized + direction one-hot (4)
+    disc_obs_dim: int = 6
+
     # Reward clipping (for stability)
     reward_clip: float = 5.0
 

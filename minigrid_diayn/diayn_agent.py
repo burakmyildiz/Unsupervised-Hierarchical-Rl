@@ -81,9 +81,9 @@ class DIAYNAgent:
         for param in self.q_target2.parameters():
             param.requires_grad = False
 
-        # Discriminator
+        # Discriminator (uses 6-dim input: x, y, direction one-hot)
         self.discriminator = Discriminator(
-            obs_dim=obs_dim,
+            obs_dim=config.disc_obs_dim,
             hidden_dim=config.hidden_dim,
             num_skills=config.num_skills
         ).to(self.device)
@@ -134,6 +134,9 @@ class DIAYNAgent:
         # Reward clipping for stability
         self.reward_clip = config.reward_clip
 
+        # Discriminator observation dimension (for 6-dim input)
+        self.disc_obs_dim = config.disc_obs_dim
+
     def select_action(
         self,
         state: np.ndarray,
@@ -166,25 +169,55 @@ class DIAYNAgent:
 
         return action
 
-    def compute_pseudo_reward(self, next_state: np.ndarray, skill: int) -> float:
+    def get_discriminator_obs(self, info: dict) -> np.ndarray:
+        """
+        Extract 6-dim discriminator observation: (x, y, direction_onehot).
+
+        Position is normalized to [0, 1] by dividing by grid size (7).
+        Direction is one-hot encoded (4 dims).
+
+        Args:
+            info: Environment info dict containing 'agent_pos' and 'agent_dir'
+
+        Returns:
+            6-dim numpy array: [x/7, y/7, dir_0, dir_1, dir_2, dir_3]
+        """
+        pos = info['agent_pos']
+        direction = info['agent_dir']
+
+        # Normalize position to [0, 1]
+        x_norm = pos[0] / 7.0
+        y_norm = pos[1] / 7.0
+
+        # One-hot encode direction
+        dir_onehot = np.zeros(4, dtype=np.float32)
+        dir_onehot[direction] = 1.0
+
+        return np.array([x_norm, y_norm, dir_onehot[0], dir_onehot[1],
+                         dir_onehot[2], dir_onehot[3]], dtype=np.float32)
+
+    def compute_pseudo_reward(self, info: dict, skill: int) -> float:
         """
         Compute DIAYN pseudo-reward: r = log q(z|s') - log p(z)
+
+        Uses 6-dim discriminator observation (x, y, direction) instead of full state.
 
         This reward encourages:
         - States that are easily identifiable by skill (high log q(z|s'))
         - Using all skills (entropy term -log p(z))
 
         Args:
-            next_state: Next state observation (numpy array)
+            info: Environment info dict containing 'agent_pos' and 'agent_dir'
             skill: Skill index used
 
         Returns:
             pseudo_reward: Intrinsic reward (float)
         """
-        next_state_tensor = torch.FloatTensor(next_state).unsqueeze(0).to(self.device)
+        disc_obs = self.get_discriminator_obs(info)
+        disc_obs_tensor = torch.FloatTensor(disc_obs).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            log_probs = self.discriminator.get_log_probs(next_state_tensor)
+            log_probs = self.discriminator.get_log_probs(disc_obs_tensor)
             log_q_z_given_s = log_probs[0, skill].item()
 
         # r = log q(z|s') - log p(z)
@@ -198,7 +231,7 @@ class DIAYNAgent:
 
     def update_discriminator(self, batch_size: int) -> Tuple[float, float]:
         """
-        Update discriminator to predict skill from next state.
+        Update discriminator to predict skill from 6-dim discriminator observation.
 
         Args:
             batch_size: Number of samples for training
@@ -210,19 +243,19 @@ class DIAYNAgent:
         if not self.replay_buffer.is_ready(batch_size):
             return 0.0, 0.0
 
-        # Sample batch
-        states, actions, rewards, next_states, dones, skills = \
+        # Sample batch (now includes disc_next_obs)
+        states, actions, rewards, next_states, dones, skills, disc_next_obs = \
             self.replay_buffer.sample(batch_size)
 
-        # Convert to tensors
-        next_states = torch.FloatTensor(next_states).to(self.device)
-        skills = torch.LongTensor(skills).to(self.device)
+        # Convert to tensors - use disc_next_obs instead of next_states
+        disc_obs_tensor = torch.FloatTensor(disc_next_obs).to(self.device)
+        skills_tensor = torch.LongTensor(skills).to(self.device)
 
-        # Forward pass: predict skill from next_state
-        logits = self.discriminator(next_states)
+        # Forward pass: predict skill from 6-dim disc_obs
+        logits = self.discriminator(disc_obs_tensor)
 
         # Cross-entropy loss
-        loss = F.cross_entropy(logits, skills)
+        loss = F.cross_entropy(logits, skills_tensor)
 
         # Update
         self.discriminator_optimizer.zero_grad()
@@ -234,7 +267,7 @@ class DIAYNAgent:
         # Compute accuracy
         with torch.no_grad():
             predictions = torch.argmax(logits, dim=-1)
-            accuracy = (predictions == skills).float().mean().item()
+            accuracy = (predictions == skills_tensor).float().mean().item()
 
         return loss.item(), accuracy
 
@@ -252,8 +285,8 @@ class DIAYNAgent:
         if not self.replay_buffer.is_ready(batch_size):
             return 0.0, 0.0
 
-        # Sample batch
-        states, actions, rewards, next_states, dones, skills = \
+        # Sample batch (ignore disc_next_obs for critic update)
+        states, actions, rewards, next_states, dones, skills, _ = \
             self.replay_buffer.sample(batch_size)
 
         # Convert to tensors
@@ -319,8 +352,8 @@ class DIAYNAgent:
         if not self.replay_buffer.is_ready(batch_size):
             return 0.0, 0.0, 0.0
 
-        # Sample batch
-        states, actions, rewards, next_states, dones, skills = \
+        # Sample batch (ignore disc_next_obs for policy update)
+        states, actions, rewards, next_states, dones, skills, _ = \
             self.replay_buffer.sample(batch_size)
 
         # Convert to tensors

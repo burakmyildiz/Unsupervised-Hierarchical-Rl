@@ -115,12 +115,14 @@ def train_diayn(config: DIAYNConfig) -> Tuple[DIAYNAgent, Dict[str, List]]:
             # 5.3.3. Compute pseudo-reward
             # Formula: log q(skill | state) - log p(skill)
             # probability that skill produced the state minus prior probability of skill
-            pseudo_reward = agent.compute_pseudo_reward(next_state, skill)
+            # Get discriminator observation (6-dim: x, y, direction)
+            disc_next_obs = agent.get_discriminator_obs(info)
+            pseudo_reward = agent.compute_pseudo_reward(info, skill)
 
             # 5.3.4. Store transition in replay buffer
             # store skill along with transition to train discriminator
             agent.replay_buffer.push(
-                state, action, pseudo_reward, next_state, done, skill
+                state, action, pseudo_reward, next_state, done, skill, disc_next_obs
             )
 
             # 5.3.5. Update statistics

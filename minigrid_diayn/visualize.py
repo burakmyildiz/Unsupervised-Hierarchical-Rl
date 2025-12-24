@@ -318,10 +318,11 @@ def plot_confusion_matrix(
                 action = agent.select_action(state, true_skill, deterministic=True)
                 state, _, terminated, truncated, info = env.step(action)
 
-                # Predict skill
-                state_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
+                # Predict skill from 6-dim discriminator observation
+                disc_obs = agent.get_discriminator_obs(info)
+                disc_obs_tensor = torch.FloatTensor(disc_obs).unsqueeze(0).to(agent.device)
                 with torch.no_grad():
-                    predicted = agent.discriminator.predict_skill(state_tensor).item()
+                    predicted = agent.discriminator.predict_skill(disc_obs_tensor).item()
 
                 confusion[true_skill, predicted] += 1
 

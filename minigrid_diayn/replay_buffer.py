@@ -12,7 +12,7 @@ class ReplayBuffer:
     """
     Experience replay buffer for off-policy learning.
 
-    Stores transitions: (state, action, reward, next_state, done, skill)
+    Stores transitions: (state, action, reward, next_state, done, skill, disc_next_obs)
     """
 
     def __init__(self, capacity: int = 100000):
@@ -30,7 +30,8 @@ class ReplayBuffer:
         reward: float,
         next_state: np.ndarray,
         done: bool,
-        skill: int
+        skill: int,
+        disc_next_obs: np.ndarray = None
     ):
         """
         Store a transition in the buffer.
@@ -42,8 +43,9 @@ class ReplayBuffer:
             next_state: Next state
             done: Whether episode ended
             skill: Skill index used
+            disc_next_obs: Discriminator observation for next state (6-dim)
         """
-        self.buffer.append((state, action, reward, next_state, done, skill))
+        self.buffer.append((state, action, reward, next_state, done, skill, disc_next_obs))
 
     def sample(self, batch_size: int) -> Tuple[np.ndarray, ...]:
         """
@@ -53,13 +55,13 @@ class ReplayBuffer:
             batch_size: Number of transitions to sample
 
         Returns:
-            Tuple of numpy arrays: (states, actions, rewards, next_states, dones, skills)
+            Tuple of numpy arrays: (states, actions, rewards, next_states, dones, skills, disc_next_obs)
         """
         # Ensure we don't sample more than available
         batch_size = min(batch_size, len(self.buffer))
 
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones, skills = zip(*batch)
+        states, actions, rewards, next_states, dones, skills, disc_next_obs = zip(*batch)
 
         return (
             np.array(states, dtype=np.float32),
@@ -67,7 +69,8 @@ class ReplayBuffer:
             np.array(rewards, dtype=np.float32),
             np.array(next_states, dtype=np.float32),
             np.array(dones, dtype=np.float32),
-            np.array(skills, dtype=np.int64)
+            np.array(skills, dtype=np.int64),
+            np.array(disc_next_obs, dtype=np.float32)
         )
 
     def __len__(self) -> int:
@@ -109,12 +112,13 @@ class SkillBalancedBuffer(ReplayBuffer):
         reward: float,
         next_state: np.ndarray,
         done: bool,
-        skill: int
+        skill: int,
+        disc_next_obs: np.ndarray = None
     ):
         """Store transition in both main buffer and skill-specific buffer."""
-        super().push(state, action, reward, next_state, done, skill)
+        super().push(state, action, reward, next_state, done, skill, disc_next_obs)
         self.skill_buffers[skill].append(
-            (state, action, reward, next_state, done, skill)
+            (state, action, reward, next_state, done, skill, disc_next_obs)
         )
 
     def sample_balanced(self, batch_size: int) -> Tuple[np.ndarray, ...]:
@@ -151,7 +155,7 @@ class SkillBalancedBuffer(ReplayBuffer):
             return self.sample(batch_size)
 
         random.shuffle(batch)
-        states, actions, rewards, next_states, dones, skills = zip(*batch)
+        states, actions, rewards, next_states, dones, skills, disc_next_obs = zip(*batch)
 
         return (
             np.array(states, dtype=np.float32),
@@ -159,5 +163,6 @@ class SkillBalancedBuffer(ReplayBuffer):
             np.array(rewards, dtype=np.float32),
             np.array(next_states, dtype=np.float32),
             np.array(dones, dtype=np.float32),
-            np.array(skills, dtype=np.int64)
+            np.array(skills, dtype=np.int64),
+            np.array(disc_next_obs, dtype=np.float32)
         )
