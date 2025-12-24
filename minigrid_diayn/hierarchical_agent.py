@@ -15,14 +15,16 @@ from replay_buffer import ReplayBuffer
 class HierarchicalConfig:
     """Config for hierarchical training."""
     num_skills: int = 8
-    skill_duration: int = 10          # steps per skill before re-selection
+    skill_duration: int = 8           # steps per skill before re-selection (6-10 good)
     meta_hidden_dim: int = 128
-    meta_lr: float = 1e-3
+    meta_lr: float = 3e-4
     gamma: float = 0.99
     tau: float = 0.005
     batch_size: int = 64
     buffer_size: int = 50000
     goal_dim: int = 2                 # (x, y) normalized goal position
+    meta_obs_dim: int = 6             # (x, y) + direction one-hot (4D)
+    entropy_coef: float = 0.1         # entropy bonus for exploration
     device: str = "mps"
 
 
@@ -68,23 +70,24 @@ class HierarchicalAgent:
             param.requires_grad = False
         self.low_level_policy.eval()
 
-        # Meta-controller networks
+        # Meta-controller networks (use simplified state: agent_pos + goal = 4D)
+        meta_input_dim = config.meta_obs_dim + config.goal_dim
         self.meta_policy = MetaController(
-            obs_dim=obs_dim,
+            obs_dim=config.meta_obs_dim,
             goal_dim=config.goal_dim,
             hidden_dim=config.meta_hidden_dim,
             num_skills=config.num_skills
         ).to(self.device)
 
         self.meta_q1 = MetaQNetwork(
-            obs_dim=obs_dim,
+            obs_dim=config.meta_obs_dim,
             goal_dim=config.goal_dim,
             hidden_dim=config.meta_hidden_dim,
             num_skills=config.num_skills
         ).to(self.device)
 
         self.meta_q2 = MetaQNetwork(
-            obs_dim=obs_dim,
+            obs_dim=config.meta_obs_dim,
             goal_dim=config.goal_dim,
             hidden_dim=config.meta_hidden_dim,
             num_skills=config.num_skills
@@ -191,12 +194,17 @@ class HierarchicalAgent:
         q2_loss.backward()
         self.meta_q2_optimizer.step()
 
-        # Update policy
+        # Update policy with entropy bonus
         skill_probs = self.meta_policy.get_skill_probs(states, goals)
         q1 = self.meta_q1(states, goals)
         q2 = self.meta_q2(states, goals)
         q = torch.min(q1, q2)
-        policy_loss = -(skill_probs * q).sum(dim=-1).mean()
+
+        # Entropy bonus for exploration
+        log_probs = torch.log(skill_probs + 1e-8)
+        entropy = -(skill_probs * log_probs).sum(dim=-1).mean()
+
+        policy_loss = -(skill_probs * q).sum(dim=-1).mean() - self.config.entropy_coef * entropy
 
         self.meta_policy_optimizer.zero_grad()
         policy_loss.backward()

@@ -32,7 +32,7 @@ class DIAYNAgent:
     3. Policy tries to reach states that are distinguishable by skill
     """
 
-    def __init__(self, config: DIAYNConfig, obs_dim: int, num_actions: int):
+    def __init__(self, config: DIAYNConfig, obs_dim: int, num_actions: int, grid_size: int = 8):
         """
         Initialize DIAYN agent.
 
@@ -40,11 +40,13 @@ class DIAYNAgent:
             config: Configuration dataclass
             obs_dim: Dimension of observation space
             num_actions: Number of discrete actions
+            grid_size: Grid size for position normalization (default 8 for 8x8)
         """
         self.config = config
         self.obs_dim = obs_dim
         self.num_actions = num_actions
         self.num_skills = config.num_skills
+        self.grid_size = grid_size
         self.device = torch.device(config.device)
 
         # ==================== Networks ====================
@@ -173,21 +175,21 @@ class DIAYNAgent:
         """
         Extract 6-dim discriminator observation: (x, y, direction_onehot).
 
-        Position is normalized to [0, 1] by dividing by grid size (7).
+        Position is normalized to [0, 1] using self.grid_size.
         Direction is one-hot encoded (4 dims).
 
         Args:
             info: Environment info dict containing 'agent_pos' and 'agent_dir'
 
         Returns:
-            6-dim numpy array: [x/7, y/7, dir_0, dir_1, dir_2, dir_3]
+            6-dim numpy array: [x_norm, y_norm, dir_0, dir_1, dir_2, dir_3]
         """
         pos = info['agent_pos']
         direction = info['agent_dir']
 
-        # Normalize position to [0, 1]
-        x_norm = pos[0] / 7.0
-        y_norm = pos[1] / 7.0
+        # Normalize position to [0, 1] using actual grid size
+        x_norm = pos[0] / (self.grid_size - 1)
+        y_norm = pos[1] / (self.grid_size - 1)
 
         # One-hot encode direction
         dir_onehot = np.zeros(4, dtype=np.float32)
@@ -469,6 +471,7 @@ class DIAYNAgent:
             'discriminator_optimizer': self.discriminator_optimizer.state_dict(),
             'log_alpha': self.log_alpha if self.log_alpha is not None else None,
             'config': self.config,
+            'grid_size': self.grid_size,
         }, path)
 
     def load(self, path: str):
@@ -489,3 +492,7 @@ class DIAYNAgent:
         if checkpoint['log_alpha'] is not None:
             self.log_alpha = checkpoint['log_alpha']
             self.alpha = self.log_alpha.exp().item()
+
+        # Load grid_size if saved (for backward compatibility)
+        if 'grid_size' in checkpoint:
+            self.grid_size = checkpoint['grid_size']

@@ -30,6 +30,41 @@ plt.style.use('seaborn-v0_8-whitegrid')
 sns.set_palette("husl")
 
 
+def draw_env_grid(ax, env, alpha=0.3):
+    """Draw environment layout (walls, doors, objects) on axis."""
+    grid = env.unwrapped.grid
+    width, height = grid.width, grid.height
+
+    for x in range(width):
+        for y in range(height):
+            cell = grid.get(x, y)
+            if cell is None:
+                continue
+
+            cell_type = cell.type
+            if cell_type == 'wall':
+                ax.add_patch(plt.Rectangle((x-0.5, y-0.5), 1, 1,
+                            facecolor='black', alpha=alpha))
+            elif cell_type == 'door':
+                color = 'brown' if cell.is_locked else 'orange'
+                ax.add_patch(plt.Rectangle((x-0.5, y-0.5), 1, 1,
+                            facecolor=color, alpha=alpha))
+            elif cell_type == 'key':
+                ax.scatter(x, y, marker='P', s=100, c='gold',
+                          edgecolors='black', zorder=10)
+            elif cell_type == 'goal':
+                ax.scatter(x, y, marker='*', s=200, c='green',
+                          edgecolors='black', zorder=10)
+            elif cell_type == 'lava':
+                ax.add_patch(plt.Rectangle((x-0.5, y-0.5), 1, 1,
+                            facecolor='red', alpha=alpha))
+
+    ax.set_xlim(-0.5, width - 0.5)
+    ax.set_ylim(-0.5, height - 0.5)
+    ax.invert_yaxis()
+    ax.set_aspect('equal')
+
+
 def plot_training_curves(metrics: Dict[str, List], save_path: str):
     """
     Plot training curves (4-panel figure).
@@ -160,6 +195,10 @@ def plot_skill_heatmaps(
             counts = counts / counts.max()
 
         im = ax.imshow(counts, cmap=cmap, interpolation='nearest')
+
+        # Overlay environment walls
+        draw_env_grid(ax, env, alpha=0.7)
+
         ax.set_title(f'Skill {skill}', fontsize=14)
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
@@ -226,17 +265,14 @@ def plot_skill_trajectories(
     for skill in range(num_skills):
         ax = axes[skill]
 
-        # Draw grid
-        ax.set_xlim(-0.5, grid_width - 0.5)
-        ax.set_ylim(-0.5, grid_height - 0.5)
-        ax.set_aspect('equal')
-        ax.invert_yaxis()
+        # Draw environment layout
+        draw_env_grid(ax, env, alpha=0.4)
 
         # Draw grid lines
         for x in range(grid_width + 1):
-            ax.axvline(x - 0.5, color='lightgray', linewidth=0.5)
+            ax.axvline(x - 0.5, color='lightgray', linewidth=0.5, zorder=0)
         for y in range(grid_height + 1):
-            ax.axhline(y - 0.5, color='lightgray', linewidth=0.5)
+            ax.axhline(y - 0.5, color='lightgray', linewidth=0.5, zorder=0)
 
         # Draw trajectories
         for traj_idx, positions in enumerate(trajectories[skill]):
@@ -434,16 +470,15 @@ def plot_skill_trajectories_with_direction(
 
     # Plot 1: All skills with direction arrows
     ax = axes[0]
-    ax.set_xlim(-0.5, grid_width - 0.5)
-    ax.set_ylim(-0.5, grid_height - 0.5)
-    ax.invert_yaxis()
-    ax.set_aspect('equal')
 
-    # Draw grid
+    # Draw environment layout (walls, doors, etc.)
+    draw_env_grid(ax, env, alpha=0.5)
+
+    # Draw light grid lines
     for x in range(grid_width + 1):
-        ax.axvline(x - 0.5, color='lightgray', linewidth=0.5)
+        ax.axvline(x - 0.5, color='lightgray', linewidth=0.5, zorder=0)
     for y in range(grid_height + 1):
-        ax.axhline(y - 0.5, color='lightgray', linewidth=0.5)
+        ax.axhline(y - 0.5, color='lightgray', linewidth=0.5, zorder=0)
 
     # Plot arrows for each skill
     for skill in range(num_skills):
@@ -590,20 +625,13 @@ def plot_skill_diversity_scatter(
         ax.scatter(centroid[0], centroid[1], c=[colors[skill]],
                   s=300, marker='X', edgecolors='black', linewidths=2)
 
-    ax.set_xlim(-0.5, env.unwrapped.width - 0.5)
-    ax.set_ylim(-0.5, env.unwrapped.height - 0.5)
-    ax.invert_yaxis()
-    ax.set_aspect('equal')
+    # Draw environment layout
+    draw_env_grid(ax, env, alpha=0.4)
+
     ax.set_xlabel('X Position', fontsize=12)
     ax.set_ylabel('Y Position', fontsize=12)
     ax.set_title('Skill Final Positions (X = centroid)', fontsize=14)
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-
-    # Draw grid
-    for x in range(env.unwrapped.width + 1):
-        ax.axvline(x - 0.5, color='lightgray', linewidth=0.5)
-    for y in range(env.unwrapped.height + 1):
-        ax.axhline(y - 0.5, color='lightgray', linewidth=0.5)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -876,21 +904,20 @@ def create_all_visualizations(
     agent: DIAYNAgent,
     config: DIAYNConfig,
     metrics: Optional[Dict] = None,
-    output_dir: str = 'plots'
+    output_dir: str = 'plots',
+    env=None,
+    env_key: str = None
 ):
-    """
-    Create all visualizations for instructor presentation.
-
-    Args:
-        agent: Trained DIAYN agent
-        config: Configuration
-        metrics: Training metrics (optional, loads from file if None)
-        output_dir: Directory to save plots
-    """
+    """Create all visualizations."""
     os.makedirs(output_dir, exist_ok=True)
 
-    # Create environment
-    env = make_env(config.env_name, fully_observable=True, seed=config.seed)
+    # Create environment if not provided
+    if env is None:
+        if env_key:
+            from environments import make_env as make_env_new
+            env, _ = make_env_new(env_key, seed=42)
+        else:
+            env = make_env(config.env_name, fully_observable=True, seed=config.seed)
 
     print("\n" + "=" * 60)
     print("Creating Visualizations")
@@ -959,22 +986,42 @@ if __name__ == "__main__":
                         help='Path to checkpoint file')
     parser.add_argument('--metrics', type=str, default=None,
                         help='Path to metrics JSON file')
-    parser.add_argument('--env', type=str, default='MiniGrid-Empty-8x8-v0',
-                        help='Environment name')
+    parser.add_argument('--env', type=str, default='empty-8x8',
+                        help='Environment key (empty-6x6, empty-8x8, fourrooms, etc.)')
     parser.add_argument('--num_skills', type=int, default=8,
                         help='Number of skills')
-    parser.add_argument('--output_dir', type=str, default='plots',
-                        help='Output directory for plots')
+    parser.add_argument('--output_dir', type=str, default='plots_results',
+                        help='Base output directory for plots')
 
     args = parser.parse_args()
 
-    # Load config
-    from config import get_config
-    config = get_config(env_name=args.env, num_skills=args.num_skills)
+    # Extract experiment name from checkpoint path
+    # e.g., experiments/fourrooms_20251224_154616/seed_42/final_model.pt -> fourrooms_20251224_154616
+    checkpoint_parts = args.checkpoint.split('/')
+    exp_name = None
+    for i, part in enumerate(checkpoint_parts):
+        if part == 'experiments' and i + 1 < len(checkpoint_parts):
+            exp_name = checkpoint_parts[i + 1]
+            break
+    if exp_name is None:
+        exp_name = checkpoint_parts[-2] if len(checkpoint_parts) > 1 else 'default'
 
-    # Create agent
-    env = make_env(config.env_name, fully_observable=True)
-    env_info = get_env_info(env)
+    output_dir = os.path.join(args.output_dir, exp_name)
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Output directory: {output_dir}")
+
+    # Use new environments.py
+    from environments import make_env as make_env_new, ENVIRONMENTS
+    from config import get_config
+
+    # Check if using new env key or old env name
+    if args.env in ENVIRONMENTS:
+        env, env_info = make_env_new(args.env, seed=42)
+    else:
+        env = make_env(args.env, fully_observable=True)
+        env_info = get_env_info(env)
+
+    config = get_config(num_skills=args.num_skills)
 
     agent = DIAYNAgent(
         config=config,
@@ -982,12 +1029,19 @@ if __name__ == "__main__":
         num_actions=env_info['num_actions']
     )
     agent.load(args.checkpoint)
-    env.close()
 
-    # Load metrics if provided
+    # Auto-find metrics if not provided
     metrics = None
     if args.metrics:
         metrics = load_metrics(args.metrics)
+    else:
+        # Try to find metrics.json in same folder as checkpoint
+        metrics_path = os.path.join(os.path.dirname(args.checkpoint), 'metrics.json')
+        if os.path.exists(metrics_path):
+            metrics = load_metrics(metrics_path)
+            print(f"Auto-loaded metrics from {metrics_path}")
 
     # Create visualizations
-    create_all_visualizations(agent, config, metrics, args.output_dir)
+    create_all_visualizations(agent, config, metrics, output_dir, env=env)
+    env.close()
+    print(f"\nAll plots saved to: {output_dir}/")

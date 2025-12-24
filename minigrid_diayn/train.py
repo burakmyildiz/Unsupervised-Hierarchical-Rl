@@ -57,11 +57,15 @@ def train_diayn(config: DIAYNConfig) -> Tuple[DIAYNAgent, Dict[str, List]]:
     print(f"Max steps per episode: {config.max_steps}")
     print("=" * 60)
 
-    # 3. Agent is created
+    # 3. Agent is created (pass grid_size for proper position normalization)
+    grid_size = env.unwrapped.width
+    print(f"Grid size: {grid_size}")
+
     agent = DIAYNAgent(
         config=config,
         obs_dim=env_info['obs_dim'],
-        num_actions=env_info['num_actions']
+        num_actions=env_info['num_actions'],
+        grid_size=grid_size
     )
 
     # 4. Metrics storage
