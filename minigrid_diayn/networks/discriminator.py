@@ -16,13 +16,13 @@ def init_weights(m, gain=1.0):
 
 
 class StateDiscriminator(nn.Module):
-    """
-    State-based discriminator for DIAYN (matches reference implementation).
+    """State-based discriminator for DIAYN.
 
-    Predicts skill from ENCODED STATE features, not position.
-    This is how the reference Skill-Discovery-Agent works.
+    Predicts which skill produced a given state from encoded features.
+    This allows the discriminator to use rich visual information for
+    skill classification, not just spatial position.
 
-    Input: Encoded state features from encoder (e.g., 64-dim or 128-dim)
+    Input: Encoded state features from CNN encoder (e.g., 64-dim)
     Output: Skill logits (num_skills)
     """
 
@@ -39,7 +39,6 @@ class StateDiscriminator(nn.Module):
         self.num_skills = num_skills
 
         # MLP: encoded_state -> hidden -> hidden -> skill_logits
-        # Matches reference: 2 hidden layers with ReLU
         self.network = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.ReLU(),
@@ -69,7 +68,7 @@ class StateDiscriminator(nn.Module):
         return F.log_softmax(logits, dim=-1)
 
     def compute_reward(self, encoded_state: torch.Tensor, skill: torch.Tensor) -> torch.Tensor:
-        """Compute intrinsic reward (matches reference implementation).
+        """Compute intrinsic reward for DIAYN.
 
         Args:
             encoded_state: Encoded state features (batch, input_dim)
@@ -77,7 +76,6 @@ class StateDiscriminator(nn.Module):
 
         Returns:
             reward: Intrinsic reward = log q(z|s) (batch,)
-                    Note: Reference does NOT subtract log p(z)!
         """
         with torch.no_grad():
             logits = self.forward(encoded_state)

@@ -1,4 +1,4 @@
-"""Hierarchical agent: meta-controller over pre-trained DIAYN skills."""
+"""Hierarchical agent for goal-conditioned skill composition."""
 
 import copy
 from typing import Dict
@@ -12,30 +12,45 @@ from networks import MetaController, MetaQNetwork, DiscretePolicy
 
 
 class HierarchicalBuffer:
-    """Replay buffer for (state, goal, skill, reward, next_state, done) transitions."""
+    """Circular replay buffer for meta-controller transitions.
+
+    Stores (state, goal, skill, reward, next_state, done) tuples
+    for training the high-level skill selection policy.
+    """
 
     def __init__(self, capacity: int):
+        """Initialize buffer with fixed capacity."""
         self.capacity = capacity
         self.buffer = []
         self.pos = 0
 
     def push(self, state, goal, skill, reward, next_state, done):
+        """Store a transition in the buffer."""
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
         self.buffer[self.pos] = (state, goal, skill, reward, next_state, done)
         self.pos = (self.pos + 1) % self.capacity
 
     def sample(self, batch_size: int):
+        """Sample a random batch of transitions."""
         idx = np.random.choice(len(self.buffer), batch_size, replace=False)
         batch = [self.buffer[i] for i in idx]
         return tuple(np.array(x) for x in zip(*batch))
 
     def __len__(self):
+        """Return current number of stored transitions."""
         return len(self.buffer)
 
 
 class HierarchicalAgent:
-    """Meta-controller that selects skills to reach goals."""
+    """Two-level hierarchical agent for goal-reaching tasks.
+
+    High level: Meta-controller selects which skill to execute
+    Low level: Frozen pre-trained DIAYN policy executes the selected skill
+
+    The meta-controller is trained with discrete SAC to maximize
+    goal-reaching reward while the low-level skills remain fixed.
+    """
 
     def __init__(
         self,
@@ -45,6 +60,14 @@ class HierarchicalAgent:
         pretrained_policy: DiscretePolicy,
         pretrained_encoder=None,
     ):
+        """
+        Args:
+            config: Hierarchical training configuration
+            obs_dim: Observation dimension
+            num_actions: Number of low-level actions
+            pretrained_policy: Frozen DIAYN skill policy
+            pretrained_encoder: Optional frozen CNN encoder
+        """
         self.config = config
         self.obs_dim = obs_dim
         self.num_actions = num_actions
@@ -95,11 +118,13 @@ class HierarchicalAgent:
         self.steps_with_skill = 0
 
     def select_skill(self, state: np.ndarray, goal: np.ndarray, deterministic: bool = False) -> int:
+        """Select which skill to execute using the meta-controller."""
         state_t = torch.FloatTensor(state).to(self.device)
         goal_t = torch.FloatTensor(goal).to(self.device)
         return self.meta_policy.select_skill(state_t, goal_t, deterministic)
 
     def select_action(self, state: np.ndarray, skill: int, deterministic: bool = False) -> int:
+        """Execute low-level action using the frozen skill policy."""
         state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         skill_oh = F.one_hot(torch.tensor([skill], device=self.device), self.num_skills).float()
 
@@ -112,19 +137,27 @@ class HierarchicalAgent:
             return torch.distributions.Categorical(logits=logits).sample().item()
 
     def should_reselect_skill(self) -> bool:
+        """Check if current skill has been executed for skill_duration steps."""
         return self.steps_with_skill >= self.config.skill_duration
 
     def step_skill_counter(self):
+        """Increment the skill execution counter."""
         self.steps_with_skill += 1
 
     def reset_skill_counter(self):
+        """Reset counter when a new skill is selected."""
         self.steps_with_skill = 0
 
     def store_transition(self, state, goal, skill, reward, next_state, done):
+        """Store a meta-level transition for training."""
         self.buffer.push(state, goal, skill, reward, next_state, done)
 
     def update(self) -> Dict[str, float]:
-        # Require minimum buffer size for stable training
+        """Update meta-controller using discrete SAC.
+
+        Returns:
+            Dict with q1_loss, q2_loss, policy_loss (empty if buffer too small)
+        """
         min_buffer = max(self.config.batch_size, 256)
         if len(self.buffer) < min_buffer:
             return {}

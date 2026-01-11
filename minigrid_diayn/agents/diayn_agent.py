@@ -1,10 +1,10 @@
-"""DIAYN Agent matching reference implementation (Skill-Discovery-Agent).
+"""DIAYN Agent for unsupervised skill discovery in MiniGrid.
 
-Key differences from our previous implementation:
-1. Discriminator uses ENCODED STATE, not position
-2. Intrinsic reward is just log q(z|s), NOT log q(z|s) - log p(z)
-3. Uses instantaneous reward, not REINFORCE with returns
-4. Shorter episodes (10 steps), more episodes (10000)
+Implements Diversity Is All You Need (DIAYN) with:
+- CNN encoder for visual grid observations
+- Categorical policy for discrete actions
+- State-based discriminator for skill classification
+- Policy gradient with entropy regularization
 """
 
 from typing import Dict, Tuple
@@ -18,15 +18,15 @@ from networks import DiscretePolicy, StateDiscriminator, PositionDiscriminator, 
 
 
 class DIAYNAgent:
-    """DIAYN agent matching reference Skill-Discovery-Agent implementation.
+    """DIAYN agent for discrete grid-world environments.
 
     Architecture:
-    - Encoder: observation → feature_dim (64 or 128)
-    - Policy: features + skill_onehot → action logits
-    - Discriminator: encoded_state → skill logits (STATE-BASED, not position!)
+    - Encoder: CNN that maps grid observation → feature vector (64-dim)
+    - Policy: MLP that maps (features + skill one-hot) → action logits
+    - Discriminator: MLP that maps encoded state → skill classification
 
-    Key insight: Discriminator predicts skill from ENCODED STATE,
-    giving it much more information than just (x,y) position.
+    The discriminator provides intrinsic rewards that encourage each skill
+    to visit distinguishable states, promoting behavioral diversity.
     """
 
     def __init__(self, config: DIAYNConfig, obs_dim: int, num_actions: int, grid_size: int,
@@ -51,24 +51,24 @@ class DIAYNAgent:
             config.feature_dim, config.num_skills, config.hidden_dim, num_actions
         ).to(self.device)
 
-        # Discriminator - can be state-based (reference) or position-based (for bootstrap)
+        # Discriminator - state-based (default) or position-based
         self.discriminator_type = getattr(config, 'discriminator_type', 'state')
         if self.discriminator_type == "position":
-            # Position-based with geometric init - helps bootstrap learning
+            # Position-based: classifies skill from (x,y) coordinates only
             self.discriminator = PositionDiscriminator(
                 hidden_dim=256,
                 num_skills=config.num_skills,
-                geometric_init=True  # Initialize to expect different skills in different regions
+                geometric_init=True  # Sector-based initialization for faster learning
             ).to(self.device)
         else:
-            # State-based (matches reference)
+            # State-based: classifies skill from encoded visual features
             self.discriminator = StateDiscriminator(
                 input_dim=config.feature_dim,
                 num_skills=config.num_skills,
                 hidden_dim=256
             ).to(self.device)
 
-        # Optimizers with weight decay (like reference)
+        # Optimizers with weight decay for regularization
         self.policy_optimizer = torch.optim.AdamW(
             list(self.encoder.parameters()) + list(self.policy.parameters()),
             lr=config.lr_policy,
@@ -80,7 +80,7 @@ class DIAYNAgent:
             weight_decay=1e-5
         )
 
-        # Learning rate schedulers - T_max=1000 like reference
+        # Learning rate schedulers for gradual decay
         self.policy_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.policy_optimizer, T_max=1000
         )
@@ -88,20 +88,19 @@ class DIAYNAgent:
             self.discriminator_optimizer, T_max=1000
         )
 
-        # Entropy coefficient (reference uses 0.01)
+        # Entropy coefficient for exploration bonus
         self.entropy_coef = config.entropy_coef
 
         # Replay buffer
         self.replay_buffer = ReplayBuffer(config.buffer_size)
 
     def select_action(self, state: np.ndarray, skill: int, deterministic: bool = False) -> int:
-        """Select action using current policy."""
+        """Select action using current policy.
+
+        Dropout remains active during action selection to add exploration noise.
+        """
         state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         skill_oh = F.one_hot(torch.tensor([skill], device=self.device), self.num_skills).float()
-
-        # Eval mode during action selection (disable dropout)
-        self.encoder.eval()
-        self.policy.eval()
 
         with torch.no_grad():
             features = self.encoder(state_t)
@@ -114,16 +113,10 @@ class DIAYNAgent:
                 probs = F.softmax(logits, dim=-1)
                 action = torch.multinomial(probs, num_samples=1).item()
 
-        # Restore train mode
-        self.encoder.train()
-        self.policy.train()
-
         return action
 
     def update(self, batch_size: int, train_discriminator: bool = True) -> Tuple[float, float, float, float]:
         """Single update step for both discriminator and policy.
-
-        Matches reference implementation structure.
 
         Args:
             batch_size: Batch size for training
@@ -184,8 +177,7 @@ class DIAYNAgent:
         # Entropy for exploration
         entropy = -(probs * log_probs).sum(dim=-1)
 
-        # Compute intrinsic reward at update time using CURRENT discriminator
-        # Reference: just log q(z|s), NO subtraction of log p(z)!
+        # Compute intrinsic reward using current discriminator: r = log q(z|s)
         with torch.no_grad():
             # Use same input as discriminator training
             if self.discriminator_type == "position":
@@ -197,13 +189,12 @@ class DIAYNAgent:
             # Dot product with skill one-hot: sum(log_q * skill_oh)
             intrinsic_reward = (log_pred_probs * skills_oh).sum(dim=-1)
 
-            # Center reward around 0 by adding log(num_skills)
-            # Without this, reward is always negative (-inf to 0) which biases
-            # off-policy learning toward low-variance "camping" behavior
-            log_prior = np.log(self.num_skills)  # log(8) ≈ 2.08 for 8 skills
+            # Add log(num_skills) to center rewards around zero
+            # Reward is positive when discriminator is better than random guessing
+            log_prior = np.log(self.num_skills)
             intrinsic_reward = intrinsic_reward + log_prior
 
-        # Policy gradient with instantaneous reward (NOT REINFORCE with returns!)
+        # Policy gradient: maximize expected intrinsic reward
         action_log_probs = log_probs.gather(1, actions_t.unsqueeze(-1)).squeeze(-1)
         policy_loss = -(action_log_probs * intrinsic_reward).mean()
 
@@ -266,7 +257,7 @@ class DIAYNAgent:
             probs = F.softmax(logits, dim=-1)
             log_probs = torch.log(probs + 1e-6)
 
-            # Intrinsic reward = log q(z|s) (no prior subtraction!)
+            # Intrinsic reward = log q(z|s)
             reward = log_probs[0, skill].item()
             prob_correct = probs[0, skill].item()
             predicted_skill = logits.argmax(dim=-1).item()

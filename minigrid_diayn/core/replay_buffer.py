@@ -1,4 +1,4 @@
-"""Replay buffer for DIAYN training."""
+"""Experience replay buffer for off-policy training."""
 
 import random
 from collections import deque
@@ -8,19 +8,28 @@ import numpy as np
 
 
 class ReplayBuffer:
-    """Experience replay buffer storing (state, action, reward, next_state, done, skill, position)."""
+    """Circular buffer storing transitions for DIAYN training.
+
+    Each transition contains: (state, action, reward, next_state, done, skill, position)
+    """
 
     def __init__(self, capacity: int = 100000):
+        """Initialize buffer with fixed capacity."""
         self.capacity = capacity
         self.buffer = deque(maxlen=capacity)
 
     def push(self, state: np.ndarray, action: int, reward: float,
              next_state: np.ndarray, done: bool, skill: int,
              position: np.ndarray = None):
-        """Push transition with optional position (for discriminator)."""
+        """Store a transition in the buffer."""
         self.buffer.append((state, action, reward, next_state, done, skill, position))
 
     def sample(self, batch_size: int) -> Tuple[np.ndarray, ...]:
+        """Sample a random batch of transitions.
+
+        Returns:
+            Tuple of (states, actions, rewards, next_states, dones, skills, positions)
+        """
         batch_size = min(batch_size, len(self.buffer))
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones, skills, positions = zip(*batch)
@@ -36,10 +45,13 @@ class ReplayBuffer:
         )
 
     def __len__(self) -> int:
+        """Return current number of transitions stored."""
         return len(self.buffer)
 
     def is_ready(self, batch_size: int) -> bool:
+        """Check if buffer has enough samples for training."""
         return len(self.buffer) >= batch_size
 
     def clear(self):
+        """Remove all transitions from buffer."""
         self.buffer.clear()

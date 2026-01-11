@@ -37,7 +37,7 @@ class DiscretePolicy(nn.Module):
         self.num_actions = num_actions
 
         # MLP: [obs + skill_onehot] -> hidden -> 2*hidden -> hidden -> action_logits
-        # Uses LeakyReLU + Dropout to prevent entropy collapse (like reference impl)
+        # LeakyReLU + Dropout prevent entropy collapse during training
         self.network = nn.Sequential(
             nn.Linear(obs_dim + skill_dim, hidden_dim),
             nn.LeakyReLU(0.2),

@@ -1,4 +1,4 @@
-"""MiniGrid environment creation and wrappers."""
+"""MiniGrid environment creation and wrappers for DIAYN skill discovery."""
 
 from typing import Dict, Tuple
 
@@ -163,10 +163,7 @@ class FlatObsWrapper(gym.ObservationWrapper):
 
 
 class PartialFlatObsWrapper(gym.ObservationWrapper):
-    """Flatten partial 7x7 observation (MiniGrid default) to 1D vector.
-
-    This matches the reference Skill-Discovery-Agent implementation.
-    """
+    """Flatten partial 7x7 observation (MiniGrid default) to 1D vector."""
 
     def __init__(self, env):
         super().__init__(env)
@@ -191,8 +188,8 @@ def make_env(env_key: str, seed: int = None, partial_obs: bool = False,
     Args:
         env_key: Short key (e.g., 'fourrooms') or full name
         seed: Random seed
-        partial_obs: If True, use partial 7x7 observation (reference impl).
-                     If False, use full grid observation (our extension).
+        partial_obs: If True, use partial 7x7 agent-centric view.
+                     If False, use full grid observation.
         random_start: If True, randomize agent starting position each episode.
                       Critical for skill diversity - without this, all episodes
                       start from same position.
@@ -221,12 +218,12 @@ def make_env(env_key: str, seed: int = None, partial_obs: bool = False,
     env = InfoWrapper(env, grid_size)
 
     if partial_obs:
-        # Reference implementation: use MiniGrid's default 7x7 partial view
+        # Use MiniGrid's default 7x7 partial view (agent-centric)
         env = PartialFlatObsWrapper(env)
         obs_dim = 7 * 7 * 3  # 147
         view_size = 7
     else:
-        # Our extension: full grid observation
+        # Use full grid observation (global view)
         env = FullyObsWrapper(env, grid_size)
         env = FlatObsWrapper(env, grid_size)
         obs_dim = grid_size * grid_size * 3 + 4

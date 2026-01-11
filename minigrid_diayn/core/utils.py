@@ -1,6 +1,5 @@
-"""Common utilities for DIAYN experiments."""
+"""Utility functions for training and experiment management."""
 
-import os
 import random
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +9,7 @@ import torch
 
 
 def get_device() -> str:
-    """Return best available device."""
+    """Return best available compute device (cuda > mps > cpu)."""
     if torch.cuda.is_available():
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -19,7 +18,7 @@ def get_device() -> str:
 
 
 def set_seed(seed: int):
-    """Set random seeds for reproducibility."""
+    """Set random seeds across all libraries for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

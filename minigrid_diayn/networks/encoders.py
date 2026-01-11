@@ -16,8 +16,8 @@ def init_weights(m, gain=1.0):
 class PartialGridEncoder(nn.Module):
     """CNN encoder for partial 7x7 MiniGrid observations.
 
-    Matches the reference Skill-Discovery-Agent implementation.
-    Processes flat 7x7x3 observation (147 dims) and outputs feature vector.
+    Processes the agent's local view (7x7x3 = 147 dims) and outputs
+    a compact feature vector for the policy and discriminator.
     """
 
     def __init__(self, feature_dim: int = 64):
@@ -25,7 +25,7 @@ class PartialGridEncoder(nn.Module):
         self.view_size = 7
         self.feature_dim = feature_dim
 
-        # CNN for spatial features (stride=1 like reference)
+        # CNN for spatial features (stride=1 preserves spatial resolution)
         self.conv = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
@@ -68,7 +68,7 @@ class PartialGridEncoder(nn.Module):
         # CNN forward
         conv_features = self.conv(grid)
 
-        # Apply ReLU to final output like reference: return torch.relu(self.fc(x))
+        # ReLU ensures non-negative features
         return torch.relu(self.fc(conv_features))
 
 
@@ -76,12 +76,11 @@ class GridEncoder(nn.Module):
     """CNN encoder for full MiniGrid grid observations.
 
     Processes flat observation (grid_size² * 3 + 4) and outputs feature vector.
-    The last 4 dimensions (direction one-hot) are processed separately.
+    The last 4 dimensions (direction one-hot) are concatenated after CNN processing.
 
-    Matches reference implementation architecture:
-    - stride=1 convolutions (no downsampling)
-    - ReLU on final output (features are positive)
-    - Input should be normalized by 255
+    Architecture:
+    - Stride-1 convolutions preserve spatial resolution
+    - ReLU activation ensures non-negative output features
     """
 
     def __init__(self, grid_size: int, feature_dim: int = 64):
@@ -89,7 +88,7 @@ class GridEncoder(nn.Module):
         self.grid_size = grid_size
         self.feature_dim = feature_dim
 
-        # CNN for spatial features - stride=1 like reference
+        # CNN for spatial features (stride=1 preserves resolution)
         self.conv = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
@@ -147,5 +146,5 @@ class GridEncoder(nn.Module):
         # Concatenate with direction and apply FC
         combined = torch.cat([conv_features, direction], dim=-1)
 
-        # Apply ReLU to final output like reference: return torch.relu(self.fc(x))
+        # ReLU ensures non-negative features
         return torch.relu(self.fc(combined))

@@ -1,4 +1,4 @@
-"""DIAYN training script matching reference implementation."""
+"""DIAYN training script for MiniGrid skill discovery."""
 
 import argparse
 import json
@@ -105,7 +105,7 @@ def train(config: DIAYNConfig, run_dir: Path):
         metrics["episode_lengths"].append(ep_len)
         metrics["collection_accuracy"].append(ep_correct / ep_len)
 
-        # Training phase - single update per episode (like reference)
+        # Training phase
         if total_steps >= config.start_training_step:
             # Optionally freeze discriminator for first N episodes
             freeze_disc = getattr(config, 'freeze_disc_episodes', 0)
@@ -169,9 +169,9 @@ if __name__ == "__main__":
     parser.add_argument("--random_start", action="store_true",
                         help="Enable random starting position")
     parser.add_argument("--partial_obs", action="store_true",
-                        help="Use partial 7x7 observation (like reference)")
+                        help="Use partial 7x7 observation instead of full grid")
     parser.add_argument("--disc_type", type=str, default="state", choices=["state", "position"],
-                        help="Discriminator type: 'state' (reference) or 'position' (geometric init)")
+                        help="Discriminator type: 'state' (encoded features) or 'position' (x,y coordinates)")
     parser.add_argument("--freeze_disc", type=int, default=0,
                         help="Freeze discriminator for first N episodes (for position disc bootstrap)")
     parser.add_argument("--movement_only", action="store_true",

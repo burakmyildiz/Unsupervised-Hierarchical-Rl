@@ -1,0 +1,222 @@
+\documentclass[11pt]{article}
+\usepackage{float}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{subcaption}
+\usepackage{tikz}
+\usetikzlibrary{positioning,calc,fit}
+\geometry{margin=1in}
+\usepackage{url}
+
+\begin{document}
+
+\section{Introduction}
+
+Deep reinforcement learning (RL) has achieved strong performance in a wide range of tasks, including game playing, robotic control, and navigation in complex environments. However, most RL methods rely on carefully designed reward functions that explicitly specify the desired behavior. In contrast, intelligent agents in the real world are able to explore their environments and acquire useful skills without external supervision, and later reuse these skills to solve new tasks efficiently.
+
+Unsupervised skill learning is particularly valuable in practice for several reasons. First, many real-world environments suffer from sparse rewards, where feedback is only received upon reaching a goal state. In such settings, agents that can acquire diverse behaviors without supervision are able to explore more effectively. Second, for long-horizon tasks, learned skills can serve as reusable building blocks in hierarchical reinforcement learning (HRL). Rather than selecting low-level actions at every time step, a high-level controller can choose among skills, significantly reducing decision complexity. Third, in many applications rewards are provided by humans, making them expensive, slow, and difficult to scale. Learning without explicit rewards can therefore reduce the dependence on human supervision.
+
+This progress report presents the design and implementation of our DIAYN-based model, followed by an analysis of the experimental results. We also discuss related work in unsupervised skill discovery and conclude with a summary of findings and future directions.
+
+
+\subsection{Model and Code Design: DIAYN with Soft Actor-Critic}
+
+The proposed agent follows the DIAYN framework for unsupervised skill discovery and is implemented on top of Soft Actor-Critic (SAC). The aim is to learn diverse behaviors (skills) without external rewards by maximizing mutual information between the executed skill $z$ and the resulting states $s$. The model consists of four neural components: a skill-conditioned stochastic policy $\pi(a \mid s,z)$, twin Q-networks $Q_1(s,a,z)$ and $Q_2(s,a,z)$, a discriminator $q(z \mid s')$, and target critics used for stable training.
+
+\paragraph{Neural architectures.}
+(1) \textbf{Policy network} takes the concatenation of the environment state and a one-hot skill vector $[s \| z]$, processes it through multi-layer fully connected blocks with ReLU activations, and outputs the mean and log-standard deviation of a Gaussian action distribution. Actions are sampled and squashed using $\tanh$ to satisfy action bounds.
+(2) \textbf{Critic networks} (two independent Q-functions) take $[s \| a \| z]$ and output a scalar Q-value. Twin critics and the minimum operator are used to reduce overestimation bias.
+(3) \textbf{Discriminator} receives only the next state $s'$ and outputs logits over skills, trained via a cross-entropy classification objective. Restricting the discriminator input to state (rather than state-action) encourages skills to be distinguishable through visited states, matching DIAYN's objective.
+
+\paragraph{Intrinsic reward and information flow.}
+After executing an action, the discriminator estimates the probability of the current skill from the next state. This yields an intrinsic reward:
+\begin{equation}
+r_{\text{DIAYN}}(s',z)=\log q(z\mid s')-\log p(z),
+\end{equation}
+where $p(z)$ is typically uniform. The first term encourages each skill to reach identifiable states, while the second term prevents collapse by promoting balanced usage of skills. This intrinsic reward is used in place of external task rewards during training.
+
+\paragraph{Training procedure.}
+Transitions $(s,a,s',z)$ are stored in a replay buffer. Training alternates between: (i) updating the discriminator to classify skills from states, (ii) updating the twin critics using SAC targets computed from intrinsic rewards and target critics, (iii) updating the policy to maximize expected Q-value with entropy regularization (with automatic temperature tuning $\alpha$), and (iv) performing soft target updates for stability:
+\begin{equation}
+\theta_{\text{tgt}} \leftarrow \tau \theta + (1-\tau)\theta_{\text{tgt}}.
+\end{equation}
+Orthogonal initialization and ReLU activations are used for stable optimization, and Adam is used for all components with standard SAC learning rates.
+
+\paragraph{Design rationale (summary).}
+Skill-conditioning is implemented by concatenating $z$ at the inputs of the policy and critics to enable skill-specific behaviors and value estimates. Twin critics improve stability by mitigating overestimation. A state-only discriminator promotes diversity in \emph{state visitation} rather than merely diverse actions. Automatic entropy tuning reduces manual hyperparameter sensitivity. Overall, the coordinated interaction between discriminator-driven intrinsic rewards and SAC optimization enables the emergence of diverse, reusable skills without task-specific supervision.
+
+\section{Findings}
+
+This section presents the empirical evaluation of three DIAYN agents trained with different network capacities and environments. The objective is to assess both task performance and the diversity of the discovered skills, which is a core goal of unsupervised skill learning.
+
+Each agent was evaluated using 10 learned skills, with multiple episodes executed per skill. Performance is measured using average episode reward, while skill diversity is approximated using displacement-based statistics, which capture how differently each skill influences the agent's movement in the environment.
+
+\subsection{Quantitative Results}
+
+\begin{table}[h]
+\centering
+\caption{Performance and Skill Diversity Statistics of DIAYN Models}
+\label{tab:diayn_results}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Model} & \textbf{Environment} & \textbf{Hidden Dim} &
+\textbf{Avg Reward} & \textbf{Reward Std} &
+\textbf{Disp Mean} & \textbf{Disp Std} & \textbf{Disp Range} \\
+\midrule
+DIAYN Agent 1 & Ant-v5 & 256 &
+-1314.25 & 144.85 &
+-0.24 & \textbf{2.01} & \textbf{7.87} \\
+
+DIAYN Agent 2 & Ant-v5 & 128 &
+-1536.14 & \textbf{241.05} &
+\textbf{0.35} & 1.33 & 5.39 \\
+
+DIAYN Agent 3 & HalfCheetah-v5 & 128 &
+\textbf{-366.96} & 97.68 &
+-0.15 & 0.74 & 3.05 \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+Table~\ref{tab:diayn_results} reports the overall performance and diversity statistics across all evaluated models.
+
+\subsection{Per-Skill Performance Analysis}
+
+To better understand the source of behavioral diversity, performance and displacement statistics are further analyzed at the individual skill level. The following tables provide a detailed breakdown of per-skill behavior for each DIAYN agent.
+
+
+\begin{table}[h]
+\centering
+\caption{Per-Skill Performance Breakdown for DIAYN Agent 1 (Ant-v5)}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{cccccccc}
+\toprule
+Skill & Avg R & R Std & Avg Disp & Disp Std & Min Disp & Max Disp & Behavior \\
+\midrule
+0 & -1476.94 & 124.64 & -6.02 & 4.72 & -13.27 & 1.68 & Backward motion \\
+1 & -1454.10 & 113.86 & 0.47 & 0.26 & 0.09 & 1.09 & Stationary / balance \\
+2 & -1200.70 & 42.49 & 0.07 & 0.09 & -0.09 & 0.22 & Stationary / balance \\
+3 & -1041.38 & 42.29 & 0.08 & 0.38 & -0.76 & 0.71 & Stationary / balance \\
+4 & -1505.68 & 43.12 & -0.17 & 0.15 & -0.46 & 0.06 & Stationary / balance \\
+5 & -1417.73 & 73.54 & 0.03 & 0.16 & -0.35 & 0.20 & Stationary / balance \\
+6 & -1190.91 & 31.66 & 1.84 & 1.25 & 0.17 & 3.80 & Forward motion \\
+7 & -1350.30 & 36.46 & 1.03 & 0.52 & 0.36 & 1.91 & Forward motion \\
+8 & -1202.72 & 61.87 & 0.23 & 0.20 & 0.00 & 0.70 & Stationary / balance \\
+9 & -1302.00 & 66.80 & 0.00 & 0.09 & -0.14 & 0.16 & Stationary / balance \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Per-Skill Performance Breakdown for DIAYN Agent 2 (Ant-v5)}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{cccccccc}
+\toprule
+Skill & Avg R & R Std & Avg Disp & Disp Std & Min Disp & Max Disp & Behavior \\
+\midrule
+0 & -1766.75 & 98.62 & -0.07 & 0.08 & -0.19 & 0.08 & Stationary / balance \\
+1 & -1506.23 & 90.63 & 1.84 & 0.97 & -0.09 & 2.63 & Forward motion \\
+2 & -1239.35 & 26.04 & -0.14 & 0.10 & -0.38 & -0.05 & Stationary / balance \\
+3 & -1523.70 & 116.85 & 0.00 & 0.15 & -0.21 & 0.32 & Stationary / balance \\
+4 & -1697.81 & 15.47 & 0.04 & 0.12 & -0.19 & 0.21 & Stationary / balance \\
+5 & -1819.53 & 148.01 & 0.50 & 1.25 & -1.26 & 3.31 & Stationary / balance \\
+6 & -1817.10 & 186.67 & 0.23 & 0.21 & 0.06 & 0.80 & Stationary / balance \\
+7 & -1377.49 & 34.56 & 3.22 & 0.84 & 2.03 & 4.49 & Forward motion \\
+8 & -1554.65 & 133.47 & 0.04 & 0.12 & -0.11 & 0.30 & Stationary / balance \\
+9 & -1058.81 & 42.34 & -2.17 & 0.64 & -2.94 & -0.65 & Backward motion \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+\begin{table}[H]
+\centering
+\caption{Per-Skill Performance Breakdown for DIAYN Agent 3 (HalfCheetah-v5)}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{cccccccc}
+\toprule
+Skill & Avg R & R Std & Avg Disp & Disp Std & Min Disp & Max Disp & Behavior \\
+\midrule
+0 & -425.52 & 1.00 & -0.16 & 0.05 & -0.29 & -0.11 & Stationary / balance \\
+1 & -379.72 & 1.32 & -0.11 & 0.06 & -0.20 & 0.01 & Stationary / balance \\
+2 & -477.71 & 1.57 & -0.13 & 0.08 & -0.29 & -0.05 & Stationary / balance \\
+3 & -236.53 & 25.45 & -0.83 & 2.19 & -3.50 & 2.95 & Moderate motion \\
+4 & -390.15 & 0.86 & -0.21 & 0.04 & -0.29 & -0.16 & Stationary / balance \\
+5 & -457.18 & 1.49 & -0.24 & 0.07 & -0.42 & -0.12 & Stationary / balance \\
+6 & -166.38 & 25.15 & 1.81 & 1.21 & -0.52 & 3.78 & Forward motion \\
+7 & -331.57 & 5.22 & -1.24 & 0.25 & -1.49 & -0.62 & Backward motion \\
+8 & -332.18 & 1.26 & -0.16 & 0.06 & -0.26 & -0.05 & Stationary / balance \\
+9 & -472.67 & 1.04 & -0.23 & 0.05 & -0.33 & -0.15 & Stationary / balance \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+The per-skill results indicate that DIAYN discovers qualitatively different behaviors without external rewards. Certain skills consistently produce forward or backward locomotion, while others result in near-stationary or balancing behaviors. Variations in displacement magnitude and range across skills suggest that the intrinsic reward encourages distinct state visitation patterns rather than uniform behavior.
+
+\subsection{Discussion}
+
+The results presented in Table~\ref{tab:diayn_results} and the per-skill breakdown tables reveal a clear trade-off between reward performance and behavioral diversity.
+
+DIAYN Agent~1, trained in the Ant-v5 environment with a larger hidden dimension, exhibits the highest displacement variance and range. As shown by the per-skill analysis, this agent learns a wide variety of behaviors, including strong forward and backward locomotion as well as stabilizing behaviors. While this indicates effective skill diversification, it is accompanied by lower average reward, suggesting less stable or efficient trajectories.
+
+DIAYN Agent~2, also trained in Ant-v5 but with a smaller network, demonstrates reduced overall diversity compared to Agent~1. However, the per-skill results show that some skills consistently induce forward motion, which is reflected in the higher mean displacement. This suggests that reduced model capacity encourages more focused behaviors at the expense of broader diversity.
+
+DIAYN Agent~3, trained in the HalfCheetah-v5 environment, achieves substantially higher average reward than the Ant-based agents. The per-skill tables indicate more consistent and stable behaviors, but with limited displacement variation across skills. This suggests that the dynamics of the HalfCheetah environment favor reward-efficient locomotion patterns, which can restrict the diversity of skills discovered through unsupervised objectives.
+
+Overall, these findings indicate that both environment dynamics and model capacity strongly influence the balance between skill diversity and performance. This trade-off is an important consideration when selecting unsupervised skills as reusable primitives for hierarchical reinforcement learning or downstream task adaptation.
+
+% Include MiniGrid experiments section
+\input{minigrid}
+
+\section{Conclusion}
+
+
+\appendix
+\section{MiniGrid Implementation}
+
+The MiniGrid DIAYN implementation adapts the continuous control framework for discrete grid-world environments.
+
+\begin{center}
+\url{https://github.com/Hamza-Emin/Unsupervised-Hierarchical-Rl}
+\end{center}
+
+\subsection{Code Structure}
+
+\begin{itemize}
+    \item \textbf{networks/}: Neural network modules
+    \begin{itemize}
+        \item \texttt{encoders.py}: Convolutional encoder for $7 \times 7 \times 3$ grid observations
+        \item \texttt{policy.py}: Categorical policy for discrete actions (vs. Gaussian in continuous)
+        \item \texttt{discriminator.py}: Skill classifier with position concatenation
+    \end{itemize}
+
+    \item \textbf{agents/}: Agent implementations
+    \begin{itemize}
+        \item \texttt{diayn\_agent.py}: Main DIAYN agent with policy gradient and manual entropy tuning
+        \item \texttt{hierarchical\_agent.py}: Meta-controller for downstream tasks
+    \end{itemize}
+
+    \item \textbf{scripts/}: Training and evaluation
+    \begin{itemize}
+        \item \texttt{train.py}: Configurable training with \texttt{--movement\_only} flag
+        \item \texttt{visualize.py}: Trajectory plots, heatmaps, and t-SNE visualizations
+    \end{itemize}
+\end{itemize}
+
+\subsection{Key Differences from Continuous Control}
+
+\begin{itemize}
+    \item \textbf{Observation encoding}: 3-layer CNN instead of MLP for visual grid input
+    \item \textbf{Action space}: Categorical distribution over discrete actions (no action squashing)
+    \item \textbf{Entropy tuning}: Manual coefficient ($\alpha = 0.5$) since SAC's automatic tuning requires continuous actions
+    \item \textbf{Discriminator input}: Encoder features concatenated with normalized $(x, y)$ position
+\end{itemize}
+
+\end{document}

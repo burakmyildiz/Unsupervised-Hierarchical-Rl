@@ -844,6 +844,7 @@ def plot_multi_env_comparison(run_dirs: list, output_dir: Path, episodes_per_ski
         env, _ = make_env(
             config.env_key,
             random_start=config.random_start,
+            partial_obs=config.partial_obs,
             movement_only=getattr(config, 'movement_only', False)
         )
         agent = DIAYNAgent.from_checkpoint(diayn_path, config)
@@ -976,6 +977,7 @@ def visualize(run_dir: Path, episodes_per_skill: int = 10):
     env, _ = make_env(
         config.env_key,
         random_start=config.random_start,
+        partial_obs=config.partial_obs,
         movement_only=getattr(config, 'movement_only', False)
     )
     agent = DIAYNAgent.from_checkpoint(diayn_path, config)
