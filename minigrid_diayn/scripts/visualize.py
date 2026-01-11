@@ -560,13 +560,12 @@ def plot_confusion_matrix(agent, env, output_dir: Path, episodes_per_skill=10):
                 action = agent.select_action(state, skill, deterministic=True)
                 state, _, done, _, info = env.step(action)
 
-                # Get discriminator prediction using position only
-                # (position-based discriminator for better skill differentiation)
-                position = info["position_normalized"]
-                position_t = torch.FloatTensor(position).unsqueeze(0).to(agent.device)
+                # Get discriminator prediction using encoded state
+                state_t = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
 
                 with torch.no_grad():
-                    pred = agent.discriminator(position_t).argmax(dim=-1).item()
+                    encoded = agent.encoder(state_t)
+                    pred = agent.discriminator(encoded).argmax(dim=-1).item()
 
                 confusion[skill, pred] += 1
                 if done:
@@ -738,13 +737,12 @@ def plot_discriminator_confidence(agent, env, output_dir: Path, walls: list,
                 action = agent.select_action(state, skill, deterministic=True)
                 state, _, done, _, info = env.step(action)
 
-                # Get discriminator softmax output using position only
-                # (position-based discriminator for better skill differentiation)
-                position = info["position_normalized"]
-                position_t = torch.FloatTensor(position).unsqueeze(0).to(agent.device)
+                # Get discriminator softmax output using encoded state
+                state_t = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
 
                 with torch.no_grad():
-                    logits = agent.discriminator(position_t)
+                    encoded = agent.encoder(state_t)
+                    logits = agent.discriminator(encoded)
                     probs = F.softmax(logits, dim=-1)
                     # Entropy: -sum(p * log(p))
                     entropy = -(probs * (probs + 1e-8).log()).sum().item()
@@ -840,10 +838,14 @@ def plot_multi_env_comparison(run_dirs: list, output_dir: Path, episodes_per_ski
     for idx, (run_dir, env_label) in enumerate(run_dirs[:len(axes)]):
         ax = axes[idx]
 
-        # Load config, agent, env
+        # Load config, agent, env with SAME settings as training
         config = DIAYNConfig.load(run_dir / "config.json")
         diayn_path = run_dir / "diayn" / "final_model.pt"
-        env, _ = make_env(config.env_key)
+        env, _ = make_env(
+            config.env_key,
+            random_start=config.random_start,
+            movement_only=getattr(config, 'movement_only', False)
+        )
         agent = DIAYNAgent.from_checkpoint(diayn_path, config)
         grid_size = env.unwrapped.width
 
@@ -970,8 +972,12 @@ def visualize(run_dir: Path, episodes_per_skill: int = 10):
         print("Plotting training curves (aux)...")
         plot_training_curves_aux(metrics, output_dir)
 
-    # Load agent and environment
-    env, _ = make_env(config.env_key)
+    # Load agent and environment with SAME settings as training
+    env, _ = make_env(
+        config.env_key,
+        random_start=config.random_start,
+        movement_only=getattr(config, 'movement_only', False)
+    )
     agent = DIAYNAgent.from_checkpoint(diayn_path, config)
     grid_size = env.unwrapped.width
 
